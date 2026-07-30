@@ -4,12 +4,13 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#203a43" />
-  <title>LibraryHub</title>
+  <title>LibraryHub Ver.1.1</title>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <style>
     :root{
       --bg:#f4f7f6; --card:#ffffff; --ink:#17202a; --muted:#566573;
       --main:#203a43; --sub:#2c5364; --accent:#e6a23c; --line:#d7e0e3;
-      --danger:#b03a2e;
+      --danger:#b03a2e; --success:#1e8449;
     }
     *{box-sizing:border-box}
     body{
@@ -43,9 +44,12 @@
       font-weight:900;cursor:pointer;
     }
     button.secondary{background:#637b84}
+    button.accent{background:var(--accent);color:#1f2933}
     button.warn{background:var(--danger)}
     button:disabled{opacity:.55;cursor:not-allowed}
-    .row{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end}
+    .isbn-grid{
+      display:grid;grid-template-columns:1fr 180px 180px;gap:10px;align-items:end
+    }
     .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
     .status{min-height:1.6em;margin:10px 0 0;font-weight:800;color:var(--sub)}
     .preview{
@@ -69,33 +73,66 @@
     .book button{margin-top:8px;padding:8px;font-size:14px}
     .small{font-size:13px;color:var(--muted)}
     footer{text-align:center;color:var(--muted);padding:24px 10px 40px;font-weight:700}
+
+    .modal{
+      position:fixed; inset:0; background:rgba(0,0,0,.72);
+      display:none; align-items:center; justify-content:center;
+      padding:18px; z-index:100;
+    }
+    .modal.open{display:flex}
+    .modal-card{
+      width:min(560px,100%); background:#fff; border-radius:18px;
+      padding:16px; max-height:92vh; overflow:auto;
+    }
+    .modal-card h2{margin-bottom:6px}
+    #reader{
+      width:100%; min-height:260px; border-radius:12px; overflow:hidden;
+      background:#111; margin:12px 0;
+    }
+    .scanner-help{
+      padding:10px 12px; background:#eef5f6; border-radius:10px;
+      font-weight:700; color:var(--sub);
+    }
+    .scanner-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .scan-result{
+      min-height:1.6em; font-weight:900; color:var(--success); margin:8px 0;
+    }
+
+    @media(max-width:760px){
+      .isbn-grid{grid-template-columns:1fr 1fr}
+      .isbn-grid>div{grid-column:1/-1}
+    }
     @media(max-width:600px){
       header h1{font-size:24px}
       main{padding:12px}
-      .row{grid-template-columns:1fr}
-      .actions{grid-template-columns:1fr}
+      .isbn-grid{grid-template-columns:1fr}
+      .actions,.scanner-actions{grid-template-columns:1fr}
       .preview{grid-template-columns:92px 1fr}
+      .modal{padding:8px}
     }
   </style>
 </head>
 <body>
 <header>
   <h1>📚 LibraryHub</h1>
-  <p>自分の本を、すぐ登録・検索</p>
+  <p>自分の本を、カメラで登録・すぐ検索</p>
 </header>
 
 <main>
   <section class="panel">
     <h2>本を登録</h2>
-    <div class="row">
+
+    <div class="isbn-grid">
       <div>
         <label for="isbn">ISBN</label>
         <input id="isbn" inputmode="numeric" autocomplete="off"
           placeholder="978から始まる13桁、または10桁" />
       </div>
+      <button id="scan" class="accent" type="button">📷 バーコード読取</button>
       <button id="lookup" type="button">書誌情報を取得</button>
     </div>
-    <p class="small">ISBNのハイフンは入っていても構いません。</p>
+
+    <p class="small">カメラを使う場合は、ブラウザからのカメラ許可が必要です。ISBNのハイフンは入っていても構いません。</p>
     <div id="status" class="status" aria-live="polite"></div>
 
     <div id="preview" class="preview" hidden>
@@ -130,7 +167,22 @@
   </section>
 </main>
 
-<footer>LibraryHub Ver.1 — データはこの端末のブラウザ内に保存されます</footer>
+<footer>LibraryHub Ver.1.1 — データはこの端末のブラウザ内に保存されます</footer>
+
+<div id="scannerModal" class="modal" aria-hidden="true">
+  <div class="modal-card">
+    <h2>ISBNバーコードを読み取る</h2>
+    <div class="scanner-help">
+      本の裏表紙にあるバーコードを横向きに画面中央へ入れてください。
+    </div>
+    <div id="reader"></div>
+    <div id="scanResult" class="scan-result" aria-live="polite"></div>
+    <div class="scanner-actions">
+      <button id="switchCamera" class="secondary" type="button">カメラ切替</button>
+      <button id="closeScanner" class="warn" type="button">閉じる</button>
+    </div>
+  </div>
+</div>
 
 <script>
 (() => {
@@ -138,15 +190,23 @@
 
   const $ = (id) => document.getElementById(id);
   const els = {
-    isbn:$("isbn"), lookup:$("lookup"), status:$("status"), preview:$("preview"),
-    coverBox:$("coverBox"), title:$("title"), authors:$("authors"),
-    publisher:$("publisher"), published:$("published"), tags:$("tags"),
-    memo:$("memo"), save:$("save"), clear:$("clear"), search:$("search"),
-    books:$("books"), count:$("count")
+    isbn:$("isbn"), lookup:$("lookup"), scan:$("scan"), status:$("status"),
+    preview:$("preview"), coverBox:$("coverBox"), title:$("title"),
+    authors:$("authors"), publisher:$("publisher"), published:$("published"),
+    tags:$("tags"), memo:$("memo"), save:$("save"), clear:$("clear"),
+    search:$("search"), books:$("books"), count:$("count"),
+    scannerModal:$("scannerModal"), reader:$("reader"),
+    scanResult:$("scanResult"), closeScanner:$("closeScanner"),
+    switchCamera:$("switchCamera")
   };
 
   const STORAGE_KEY = "libraryhub_books_v1";
   let currentBook = null;
+  let html5QrCode = null;
+  let cameras = [];
+  let cameraIndex = 0;
+  let scannerRunning = false;
+  let scanLocked = false;
 
   const normalizeIsbn = value => value.replace(/[^0-9Xx]/g, "").toUpperCase();
 
@@ -205,8 +265,9 @@
       const response = await fetch(
         `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn)}`
       );
-      if (!response.ok) throw new Error("通信エラー");
+      if (!response.ok) throw new Error("通信エラーが発生しました。");
       const data = await response.json();
+
       if (!data.items || data.items.length === 0) {
         throw new Error("このISBNの本が見つかりませんでした。");
       }
@@ -254,9 +315,13 @@
 
   function addBook() {
     if (!currentBook) return;
+
     const books = loadBooks();
     const duplicate = books.some(b => b.isbn === currentBook.isbn);
-    if (duplicate && !confirm("同じISBNの本がすでにあります。もう1冊保存しますか？")) return;
+
+    if (duplicate && !confirm("同じISBNの本がすでにあります。もう1冊保存しますか？")) {
+      return;
+    }
 
     currentBook.tags = els.tags.value.trim();
     currentBook.memo = els.memo.value.trim();
@@ -277,12 +342,14 @@
   function renderBooks() {
     const query = els.search.value.trim().toLowerCase();
     const all = loadBooks();
+
     const filtered = all.filter(book =>
       [book.title, book.authors, book.isbn, book.tags, book.memo, book.publisher]
         .join(" ").toLowerCase().includes(query)
     );
 
     els.count.textContent = `${filtered.length}冊`;
+
     if (filtered.length === 0) {
       els.books.innerHTML = `<div class="small">${query ? "該当する本がありません。" : "まだ本が登録されていません。"}</div>`;
       return;
@@ -307,16 +374,140 @@
     `).join("");
   }
 
+  async function openScanner() {
+    if (typeof Html5Qrcode === "undefined") {
+      setStatus("バーコード読取機能を読み込めませんでした。通信環境を確認してください。", true);
+      return;
+    }
+
+    els.scannerModal.classList.add("open");
+    els.scannerModal.setAttribute("aria-hidden", "false");
+    els.scanResult.textContent = "カメラを準備しています…";
+    scanLocked = false;
+
+    try {
+      cameras = await Html5Qrcode.getCameras();
+      if (!cameras || cameras.length === 0) {
+        throw new Error("利用できるカメラが見つかりません。");
+      }
+
+      cameraIndex = Math.max(0, cameras.findIndex(c =>
+        /back|rear|environment|背面/i.test(c.label)
+      ));
+
+      html5QrCode = html5QrCode || new Html5Qrcode("reader");
+      await startSelectedCamera();
+    } catch (error) {
+      els.scanResult.textContent = error.message || "カメラを開始できませんでした。";
+      setStatus("カメラを利用できません。ブラウザのカメラ許可を確認してください。", true);
+    }
+  }
+
+  async function startSelectedCamera() {
+    if (!html5QrCode || !cameras.length) return;
+
+    if (scannerRunning) {
+      try { await html5QrCode.stop(); } catch {}
+      scannerRunning = false;
+    }
+
+    els.scanResult.textContent = "バーコードを画面中央へ入れてください。";
+
+    const formats = [
+      Html5QrcodeSupportedFormats.EAN_13,
+      Html5QrcodeSupportedFormats.EAN_8,
+      Html5QrcodeSupportedFormats.UPC_A,
+      Html5QrcodeSupportedFormats.UPC_E
+    ];
+
+    await html5QrCode.start(
+      cameras[cameraIndex].id,
+      {
+        fps: 10,
+        qrbox: { width: 280, height: 130 },
+        aspectRatio: 1.777778,
+        formatsToSupport: formats
+      },
+      onScanSuccess,
+      () => {}
+    );
+
+    scannerRunning = true;
+  }
+
+  async function onScanSuccess(decodedText) {
+    if (scanLocked) return;
+
+    const code = normalizeIsbn(decodedText);
+    if (![10,13].includes(code.length)) return;
+
+    scanLocked = true;
+    els.scanResult.textContent = `読み取り成功：${code}`;
+    els.isbn.value = code;
+
+    if (navigator.vibrate) {
+      navigator.vibrate(120);
+    }
+
+    await closeScanner();
+    setStatus("ISBNを読み取りました。書誌情報を検索します。");
+    lookupBook();
+  }
+
+  async function closeScanner() {
+    if (html5QrCode && scannerRunning) {
+      try {
+        await html5QrCode.stop();
+        await html5QrCode.clear();
+      } catch {}
+    }
+
+    scannerRunning = false;
+    els.scannerModal.classList.remove("open");
+    els.scannerModal.setAttribute("aria-hidden", "true");
+    els.reader.innerHTML = "";
+  }
+
+  async function switchCamera() {
+    if (cameras.length < 2) {
+      els.scanResult.textContent = "切り替え可能な別のカメラがありません。";
+      return;
+    }
+
+    cameraIndex = (cameraIndex + 1) % cameras.length;
+
+    try {
+      await startSelectedCamera();
+      els.scanResult.textContent = `カメラを切り替えました。`;
+    } catch {
+      els.scanResult.textContent = "カメラの切り替えに失敗しました。";
+    }
+  }
+
   els.lookup.addEventListener("click", lookupBook);
+  els.scan.addEventListener("click", openScanner);
+
   els.isbn.addEventListener("keydown", e => {
     if (e.key === "Enter") lookupBook();
   });
+
   els.save.addEventListener("click", addBook);
   els.clear.addEventListener("click", clearForm);
   els.search.addEventListener("input", renderBooks);
+  els.closeScanner.addEventListener("click", closeScanner);
+  els.switchCamera.addEventListener("click", switchCamera);
+
+  els.scannerModal.addEventListener("click", e => {
+    if (e.target === els.scannerModal) closeScanner();
+  });
+
   els.books.addEventListener("click", e => {
     const id = e.target.dataset.delete;
     if (id) removeBook(id);
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden && scannerRunning) closeScanner();
   });
 
   renderBooks();
