@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#203a43">
-<title>LibraryHub Ver.1.2</title>
+<title>LibraryHub Ver.1.3</title>
 <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 <style>
 :root{--bg:#f4f7f6;--card:#fff;--ink:#17202a;--muted:#566573;--main:#203a43;--sub:#2c5364;--accent:#e6a23c;--line:#d7e0e3;--danger:#b03a2e;--success:#1e8449}
@@ -42,7 +42,12 @@ button:disabled{opacity:.55}
 footer{text-align:center;color:var(--muted);padding:24px 10px 40px;font-weight:700}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.72);display:none;align-items:center;justify-content:center;padding:12px;z-index:100}
 .modal.open{display:flex}.modal-card{width:min(560px,100%);background:#fff;border-radius:18px;padding:16px;max-height:94vh;overflow:auto}
-#reader{width:100%;min-height:260px;border-radius:12px;overflow:hidden;background:#111;margin:12px 0}
+#reader{width:100%;min-height:260px;border-radius:12px;overflow:hidden;background:#111;margin:12px 0;transition:.2s}
+#reader.scan-ok{outline:6px solid #28a745;box-shadow:0 0 0 8px rgba(40,167,69,.18)}
+.scan-toast{position:fixed;left:50%;top:42%;transform:translate(-50%,-50%) scale(.96);z-index:200;
+background:#1e8449;color:#fff;padding:18px 24px;border-radius:16px;font-weight:900;font-size:22px;
+box-shadow:0 12px 30px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:.2s;text-align:center}
+.scan-toast.show{opacity:1;transform:translate(-50%,-50%) scale(1)}
 .scanner-help{padding:10px 12px;background:#eef5f6;border-radius:10px;font-weight:700;color:var(--sub)}
 .scanner-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px}.scan-result{min-height:1.6em;font-weight:900;color:var(--success);margin:8px 0}
 @media(max-width:760px){.grid{grid-template-columns:1fr}.actions,.scanner-actions{grid-template-columns:1fr}.preview{grid-template-columns:92px 1fr}main{padding:12px}header h1{font-size:25px}}
@@ -85,8 +90,9 @@ footer{text-align:center;color:var(--muted);padding:24px 10px 40px;font-weight:7
 <div id="books"></div>
 </section>
 </main>
-<footer>LibraryHub Ver.1.2 — データはこの端末のブラウザ内に保存されます</footer>
+<footer>LibraryHub Ver.1.3 — データはこの端末のブラウザ内に保存されます</footer>
 
+<div id="scanToast" class="scan-toast">✓ ISBNを読み取りました</div>
 <div id="scannerModal" class="modal" aria-hidden="true">
 <div class="modal-card">
 <h2>ISBNバーコードを読み取る</h2>
@@ -99,12 +105,55 @@ footer{text-align:center;color:var(--muted);padding:24px 10px 40px;font-weight:7
 (() => {
 "use strict";
 const $=id=>document.getElementById(id);
-const e={isbn:$("isbn"),lookup:$("lookup"),scan:$("scan"),status:$("status"),preview:$("preview"),coverBox:$("coverBox"),title:$("title"),authors:$("authors"),publisher:$("publisher"),published:$("published"),tags:$("tags"),memo:$("memo"),save:$("save"),clear:$("clear"),search:$("search"),books:$("books"),count:$("count"),modal:$("scannerModal"),reader:$("reader"),scanResult:$("scanResult"),close:$("closeScanner"),switch:$("switchCamera"),manualTitle:$("manualTitle"),manualAuthors:$("manualAuthors"),manualPublisher:$("manualPublisher"),applyManual:$("applyManual")};
+const e={isbn:$("isbn"),lookup:$("lookup"),scan:$("scan"),status:$("status"),preview:$("preview"),coverBox:$("coverBox"),title:$("title"),authors:$("authors"),publisher:$("publisher"),published:$("published"),tags:$("tags"),memo:$("memo"),save:$("save"),clear:$("clear"),search:$("search"),books:$("books"),count:$("count"),modal:$("scannerModal"),reader:$("reader"),scanResult:$("scanResult"),close:$("closeScanner"),switch:$("switchCamera"),manualTitle:$("manualTitle"),manualAuthors:$("manualAuthors"),manualPublisher:$("manualPublisher"),applyManual:$("applyManual"),scanToast:$("scanToast")};
 const KEY="libraryhub_books_v1";
 let current=null,scanner=null,cameras=[],cameraIndex=0,running=false,locked=false;
 const norm=v=>String(v||"").replace(/[^0-9Xx]/g,"").toUpperCase();
 const esc=v=>String(v||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
 function status(m,err=false){e.status.textContent=m;e.status.style.color=err?"#b03a2e":"#2c5364"}
+function successSound(){
+ try{
+  const AudioCtx=window.AudioContext||window.webkitAudioContext;
+  if(!AudioCtx)return;
+  const ctx=new AudioCtx();
+  const now=ctx.currentTime;
+  const notes=[659.25,783.99,1046.5];
+  notes.forEach((freq,i)=>{
+   const osc=ctx.createOscillator(),gain=ctx.createGain();
+   osc.type="sine";osc.frequency.setValueAtTime(freq,now+i*0.11);
+   gain.gain.setValueAtTime(0.0001,now+i*0.11);
+   gain.gain.exponentialRampToValueAtTime(0.18,now+i*0.11+0.015);
+   gain.gain.exponentialRampToValueAtTime(0.0001,now+i*0.11+0.16);
+   osc.connect(gain).connect(ctx.destination);
+   osc.start(now+i*0.11);osc.stop(now+i*0.11+0.18);
+  });
+  setTimeout(()=>ctx.close().catch(()=>{}),700);
+ }catch{}
+}
+function showScanSuccess(){
+ e.reader.classList.add("scan-ok");
+ e.scanToast.classList.add("show");
+ successSound();
+ if(navigator.vibrate)navigator.vibrate([90,40,120]);
+ setTimeout(()=>{e.reader.classList.remove("scan-ok");e.scanToast.classList.remove("show")},900);
+}
+async function fetchCoverInBackground(isbn,book){
+ if(book.thumbnail)return;
+ const controller=new AbortController();
+ const timer=setTimeout(()=>controller.abort(),3000);
+ try{
+  const r=await fetch(`https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn)}&maxResults=5`,{cache:"no-store",signal:controller.signal});
+  if(!r.ok)return;
+  const d=await r.json();
+  const exact=d.items?.find(i=>(i.volumeInfo?.industryIdentifiers||[]).some(x=>norm(x.identifier)===isbn))||d.items?.[0];
+  const url=(exact?.volumeInfo?.imageLinks?.thumbnail||exact?.volumeInfo?.imageLinks?.smallThumbnail||"").replace("http://","https://");
+  if(url && current && current.isbn===isbn){
+    current.thumbnail=url;
+    e.coverBox.className="";
+    e.coverBox.innerHTML=`<img src="${esc(url)}" alt="表紙">`;
+  }
+ }catch{}finally{clearTimeout(timer)}
+}
 function load(){try{const x=JSON.parse(localStorage.getItem(KEY)||"[]");return Array.isArray(x)?x:[]}catch{return[]}}
 function store(x){localStorage.setItem(KEY,JSON.stringify(x))}
 function showBook(book){
@@ -142,6 +191,7 @@ async function lookup(){
    try{book=await fromOpenBD(isbn);status("openBDから書誌情報を取得しました。")}
    catch{book=await fromGoogle(isbn);status("Google Booksから書誌情報を取得しました。")}
    showBook(book);
+   fetchCoverInBackground(isbn,book);
  }catch(err){
    current=null;e.preview.hidden=true;e.save.disabled=true;
    status("書誌情報を自動取得できませんでした。下の「手入力」を開いて登録できます。",true);
@@ -181,12 +231,12 @@ async function openScanner(){
 async function startCamera(){
  if(running){try{await scanner.stop()}catch{}running=false}
  await scanner.start({facingMode:"environment"},{fps:12,qrbox:{width:300,height:150},aspectRatio:1.7778,formatsToSupport:[Html5QrcodeSupportedFormats.EAN_13]},async text=>{
-  if(locked)return;const code=norm(text);if(code.length!==13||!code.startsWith("978"))return;locked=true;e.isbn.value=code;e.scanResult.textContent="読取成功："+code;await closeScanner();lookup();
+  if(locked)return;const code=norm(text);if(code.length!==13||!code.startsWith("978"))return;locked=true;e.isbn.value=code;e.scanResult.textContent="読取成功："+code;showScanSuccess();setTimeout(async()=>{await closeScanner();lookup()},550);
  },()=>{});
  running=true;
 }
 async function closeScanner(){if(scanner&&running){try{await scanner.stop();await scanner.clear()}catch{}}running=false;e.modal.classList.remove("open");e.modal.setAttribute("aria-hidden","true");e.reader.innerHTML=""}
-async function switchCamera(){if(cameras.length<2){e.scanResult.textContent="別のカメラがありません。";return}cameraIndex=(cameraIndex+1)%cameras.length;try{if(running)await scanner.stop();running=false;await scanner.start(cameras[cameraIndex].id,{fps:12,qrbox:{width:300,height:150},formatsToSupport:[Html5QrcodeSupportedFormats.EAN_13]},async t=>{const c=norm(t);if(c.length===13){e.isbn.value=c;await closeScanner();lookup()}},()=>{});running=true}catch{e.scanResult.textContent="切替に失敗しました。"}}
+async function switchCamera(){if(cameras.length<2){e.scanResult.textContent="別のカメラがありません。";return}cameraIndex=(cameraIndex+1)%cameras.length;try{if(running)await scanner.stop();running=false;await scanner.start(cameras[cameraIndex].id,{fps:12,qrbox:{width:300,height:150},formatsToSupport:[Html5QrcodeSupportedFormats.EAN_13]},async t=>{const c=norm(t);if(c.length===13){e.isbn.value=c;showScanSuccess();setTimeout(async()=>{await closeScanner();lookup()},550)}},()=>{});running=true}catch{e.scanResult.textContent="切替に失敗しました。"}}
 e.lookup.onclick=lookup;e.scan.onclick=openScanner;e.applyManual.onclick=applyManual;e.save.onclick=add;e.clear.onclick=clear;e.search.oninput=render;e.close.onclick=closeScanner;e.switch.onclick=switchCamera;
 e.isbn.addEventListener("keydown",x=>{if(x.key==="Enter")lookup()});e.books.onclick=x=>{const id=x.target.dataset.delete;if(id)remove(id)};
 document.addEventListener("visibilitychange",()=>{if(document.hidden&&running)closeScanner()});render();
